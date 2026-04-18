@@ -14,6 +14,7 @@ A battle-tested guide to building persistent memory for [Claude Code](https://gi
 |-------|-------------|
 | [Full Setup](full-setup.md) | Starting from zero — subscription, installation, memory setup |
 | [Memory Setup](memory-setup.md) | Already have Claude Code — just need the memory system |
+| [Advanced Automation](advanced-automation.md) | Memory already works — now automate mining, daemon, nightly compile, multi-source ingestion |
 | [Examples](examples/) | Real CLAUDE.md, MEMORY.md, and memory file templates |
 
 ---
