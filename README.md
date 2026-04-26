@@ -31,7 +31,7 @@ Claude reads CLAUDE.md ──────► Identity, rules, style, what NOT to
 Claude reads MEMORY.md ──────► Index of all memories (loaded automatically)
     │
     ▼
-Claude loads relevant memories ► wiki, feedback, project context
+Claude loads relevant memories ► wiki, feedback, and project context
     │
     ▼
 Work happens
