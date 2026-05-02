@@ -27,46 +27,50 @@ Next Claude session reads MEMORY.md → loads relevant files → full context
 | `memory_logger.py` | Parse session → log all memory read/write ops |
 | `config.yaml` | API keys + provider config (gitignored) |
 
-## Setup
+## Setup — 2 steps
 
 ```bash
-# 1. Install deps
-pip install openai pyyaml   # minimum — openai package works for all providers below
+# 1. Install
+pip install openai pyyaml
 
-# 2. Set ANY key you have — one is enough
+# 2. Set your key + provider URL (model is auto-detected)
 export LLM_API_KEY="your-key"
-export LLM_BASE_URL="https://api.groq.com/openai/v1"   # Groq example
-export LLM_MODEL="llama-3.3-70b-versatile"
+export LLM_BASE_URL="https://api.groq.com/openai/v1"
 
-# 3. Run
 python scripts/compile.py
 ```
+
+**Model is selected automatically** — the script calls `/v1/models`, sees what's available, picks the best one. No model name needed.
+
+**Free options (zero cost to start):**
+- Groq: [console.groq.com](https://console.groq.com) → free tier
+  ```
+  LLM_BASE_URL=https://api.groq.com/openai/v1
+  ```
+- Cerebras: [cloud.cerebras.ai](https://cloud.cerebras.ai) → free tier
+  ```
+  LLM_BASE_URL=https://api.cerebras.ai/v1
+  ```
 
 Works with **any OpenAI-compatible API**: Groq, Cerebras, SambaNova, OpenRouter,
 Together AI, Mistral, local Ollama — anything that speaks `/v1/chat/completions`.
 
-**Free options:**
-- Groq: [console.groq.com](https://console.groq.com) → free tier → `base_url: https://api.groq.com/openai/v1`
-- Cerebras: [cloud.cerebras.ai](https://cloud.cerebras.ai) → free tier → `base_url: https://api.cerebras.ai/v1`
+If a model hits a rate limit, the script automatically falls back to the next available model.
 
-## Provider Priority
+## Named provider env vars (alternative)
+
+If you don't want to set `LLM_BASE_URL`, just set the named var and the script
+figures out the URL itself:
 
 ```
-LLM_API_KEY (universal)
-    → CEREBRAS_API_KEY
-    → GROQ_API_KEY
-    → SAMBANOVA_API_KEY
-    → OPENAI_API_KEY
-    → ANTHROPIC_API_KEY
+CEREBRAS_API_KEY=<key>   → https://api.cerebras.ai/v1   (auto)
+GROQ_API_KEY=<key>       → https://api.groq.com/openai/v1 (auto)
+SAMBANOVA_API_KEY=<key>  → https://api.sambanova.ai/v1   (auto)
+OPENAI_API_KEY=<key>     → https://api.openai.com/v1     (auto)
+ANTHROPIC_API_KEY=<key>  → Anthropic SDK                 (auto)
 ```
 
-Or use `scripts/config.yaml` (gitignored — safe for keys):
-```yaml
-llm:
-  api_key: "your-key"
-  base_url: "https://api.groq.com/openai/v1"
-  model: "llama-3.3-70b-versatile"
-```
+Priority: `LLM_API_KEY` → Cerebras → Groq → SambaNova → OpenAI → Anthropic
 
 ## Auto-run via Claude Code Hooks
 
