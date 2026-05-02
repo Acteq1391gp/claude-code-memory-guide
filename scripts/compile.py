@@ -412,15 +412,56 @@ def parse_memory_blocks(text: str) -> list[dict]:
     return blocks
 
 
+MEMORY_INDEX_SECTIONS = {
+    "feedback": "## 💬 FEEDBACK",
+    "user":     "## 👤 USER",
+    "project":  "## 📁 PROJECTS",
+    "concept":  "## 🧠 CONCEPTS",
+}
+
+
+def update_memory_index(memory_root: Path, name: str, description: str, etype: str, dry_run: bool):
+    """Append wikilink entry to MEMORY.md under the right section (creates section if missing)."""
+    index_path = memory_root / "MEMORY.md"
+    if not index_path.exists():
+        return
+
+    text = index_path.read_text(errors="replace")
+
+    # Skip if already referenced
+    if f"[[{name}]]" in text or f"[[{name}|" in text:
+        print(f"[compile] MEMORY.md already has [[{name}]] — skip")
+        return
+
+    line = f"- [[{name}|{description}]]\n"
+    section_header = MEMORY_INDEX_SECTIONS.get(etype, "## 🧠 CONCEPTS")
+
+    if section_header in text:
+        # Insert after the section header line
+        idx = text.index(section_header)
+        end_of_header = text.index("\n", idx) + 1
+        new_text = text[:end_of_header] + line + text[end_of_header:]
+    else:
+        # Section doesn't exist — append at end
+        new_text = text.rstrip() + f"\n\n{section_header}\n{line}"
+
+    if dry_run:
+        print(f"\n--- would add to MEMORY.md ---\n{line}---")
+    else:
+        index_path.write_text(new_text)
+        print(f"[compile] MEMORY.md ← [[{name}]]")
+
+
 def save_memories(memory_root: Path, blocks: list[dict], date_str: str, dry_run: bool):
     for entry in blocks:
         name = entry.get("name", "unnamed").replace(" ", "_").lower()
         etype = entry.get("type", "concept")
+        description = entry.get("description", "")
         folder_map = {
             "feedback": "feedback",
-            "user": "user",
-            "project": "projects",
-            "concept": "concepts",
+            "user":     "user",
+            "project":  "projects",
+            "concept":  "concepts",
         }
         folder = folder_map.get(etype, "concepts")
         dest_dir = memory_root / folder
@@ -429,7 +470,7 @@ def save_memories(memory_root: Path, blocks: list[dict], date_str: str, dry_run:
 
         content = f"""---
 name: {name}
-description: {entry.get('description', '')}
+description: {description}
 type: {etype}
 created: {date_str}
 ---
@@ -438,12 +479,14 @@ created: {date_str}
 """
         if dry_run:
             print(f"\n--- would write {dest} ---\n{content}\n---")
+            update_memory_index(memory_root, name, description, etype, dry_run=True)
         else:
             if dest.exists():
                 print(f"[compile] SKIP (exists): {dest}")
             else:
                 dest.write_text(content)
                 print(f"[compile] Memory → {dest}")
+                update_memory_index(memory_root, name, description, etype, dry_run=False)
 
 # ---------------------------------------------------------------------------
 # Main
