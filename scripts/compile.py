@@ -47,124 +47,189 @@ except ImportError:
     yaml = None
 
 # ---------------------------------------------------------------------------
-# Provider registry
+# Provider registry — auto-detect model from /v1/models
 # ---------------------------------------------------------------------------
 
-PROVIDERS = {}
+# Known providers: key env var → (base_url, preferred model names in priority order)
+# The script calls /v1/models and picks the first available from the priority list.
+# If none match, it falls back to the first model returned by the API.
+KNOWN_PROVIDERS = [
+    {
+        "name":     "cerebras",
+        "key_env":  "CEREBRAS_API_KEY",
+        "cfg_key":  "cerebras.api_key",
+        "base_url": "https://api.cerebras.ai/v1",
+        "priority": [
+            "qwen-3-235b-a22b-instruct-2507",
+            "gpt-oss-120b",
+            "llama3.1-8b",
+        ],
+    },
+    {
+        "name":     "groq",
+        "key_env":  "GROQ_API_KEY",
+        "cfg_key":  "groq.api_key",
+        "base_url": "https://api.groq.com/openai/v1",
+        "priority": [
+            "llama-3.3-70b-versatile",
+            "llama-3.1-70b-versatile",
+            "llama3-70b-8192",
+            "mixtral-8x7b-32768",
+        ],
+    },
+    {
+        "name":     "sambanova",
+        "key_env":  "SAMBANOVA_API_KEY",
+        "cfg_key":  "sambanova.api_key",
+        "base_url": "https://api.sambanova.ai/v1",
+        "priority": [
+            "Meta-Llama-3.3-70B-Instruct",
+            "Meta-Llama-3.1-70B-Instruct",
+            "Meta-Llama-3.1-8B-Instruct",
+        ],
+    },
+    {
+        "name":     "openai",
+        "key_env":  "OPENAI_API_KEY",
+        "cfg_key":  "openai.api_key",
+        "base_url": "https://api.openai.com/v1",
+        "priority": [
+            "gpt-4o-mini",
+            "gpt-4o",
+            "gpt-3.5-turbo",
+        ],
+    },
+]
+
+
+def _fetch_models(client) -> list[str]:
+    """Fetch available model IDs from /v1/models. Returns [] on error."""
+    try:
+        resp = client.models.list()
+        return [m.id for m in resp.data]
+    except Exception:
+        return []
+
+
+def _pick_model(available: list[str], priority: list[str]) -> str | None:
+    """Pick first model from priority list that exists in available. Falls back to first available."""
+    for p in priority:
+        if p in available:
+            return p
+    # fuzzy fallback: partial match
+    for p in priority:
+        for a in available:
+            if p.lower() in a.lower() or a.lower() in p.lower():
+                return a
+    return available[0] if available else None
+
+
+def _make_caller(client, model: str, fallback_models: list[str] = None):
+    def call(prompt, system=""):
+        msgs = []
+        if system:
+            msgs.append({"role": "system", "content": system})
+        msgs.append({"role": "user", "content": prompt})
+        models_to_try = [model] + [m for m in (fallback_models or []) if m != model]
+        last_err = None
+        for m in models_to_try:
+            try:
+                r = client.chat.completions.create(model=m, messages=msgs, max_tokens=2000)
+                if m != model:
+                    print(f"[compile] fell back to model: {m}")
+                return r.choices[0].message.content
+            except Exception as e:
+                last_err = e
+                if "429" in str(e) or "rate" in str(e).lower() or "quota" in str(e).lower():
+                    continue
+                raise
+        raise last_err
+    return call
+
+
+def _load_provider(spec: dict):
+    """Try to load a named provider. Returns callable or None."""
+    try:
+        import openai as _openai
+    except ImportError:
+        return None
+
+    key = os.environ.get(spec["key_env"]) or _cfg(spec["cfg_key"])
+    if not key:
+        return None
+
+    # allow model override via env / config
+    model_override = (
+        os.environ.get(spec["name"].upper() + "_MODEL")
+        or _cfg(spec["name"] + ".model")
+    )
+
+    try:
+        client = _openai.OpenAI(api_key=key, base_url=spec["base_url"])
+        if model_override:
+            model = model_override
+        else:
+            available = _fetch_models(client)
+            model = _pick_model(available, spec["priority"])
+            if not model:
+                return None
+        print(f"[compile] provider: {spec['name']}  model: {model}")
+        return _make_caller(client, model, fallback_models=available)
+    except Exception:
+        return None
+
 
 def _load_universal():
-    """Universal OpenAI-compatible provider via LLM_API_KEY + LLM_BASE_URL."""
+    """LLM_API_KEY + LLM_BASE_URL — any OpenAI-compatible API, model auto-detected."""
     try:
-        import openai
-        key = os.environ.get("LLM_API_KEY") or _cfg("llm.api_key")
-        if not key:
-            return None
-        base_url = os.environ.get("LLM_BASE_URL") or _cfg("llm.base_url") or "https://api.openai.com/v1"
-        model = os.environ.get("LLM_MODEL") or _cfg("llm.model") or "gpt-4o-mini"
-        client = openai.OpenAI(api_key=key, base_url=base_url)
+        import openai as _openai
+    except ImportError:
+        return None
 
-        def call(prompt, system=""):
-            msgs = []
-            if system:
-                msgs.append({"role": "system", "content": system})
-            msgs.append({"role": "user", "content": prompt})
-            r = client.chat.completions.create(model=model, messages=msgs, max_tokens=2000)
-            return r.choices[0].message.content
-        return call
+    key = os.environ.get("LLM_API_KEY") or _cfg("llm.api_key")
+    if not key:
+        return None
+
+    base_url = os.environ.get("LLM_BASE_URL") or _cfg("llm.base_url") or "https://api.openai.com/v1"
+    model_override = os.environ.get("LLM_MODEL") or _cfg("llm.model")
+
+    # generic priority list used when no explicit model given
+    generic_priority = [
+        "llama-3.3-70b-versatile", "llama-3.1-70b-versatile",
+        "qwen-3-235b-a22b-instruct-2507", "gpt-oss-120b",
+        "Meta-Llama-3.3-70B-Instruct", "gpt-4o-mini",
+        "llama3.1-8b", "llama3-70b-8192",
+    ]
+
+    try:
+        client = _openai.OpenAI(api_key=key, base_url=base_url)
+        if model_override:
+            model = model_override
+        else:
+            available = _fetch_models(client)
+            model = _pick_model(available, generic_priority) or "gpt-4o-mini"
+        print(f"[compile] provider: universal ({base_url.split('/')[2]})  model: {model}")
+        return _make_caller(client, model, fallback_models=available)
     except Exception:
         return None
 
-def _load_cerebras():
-    try:
-        from cerebras.cloud.sdk import Cerebras
-        key = os.environ.get("CEREBRAS_API_KEY") or _cfg("cerebras.api_key")
-        if not key:
-            return None
-        client = Cerebras(api_key=key)
-        model = os.environ.get("CEREBRAS_MODEL") or _cfg("cerebras.model") or "llama-3.3-70b"
-
-        def call(prompt, system=""):
-            msgs = []
-            if system:
-                msgs.append({"role": "system", "content": system})
-            msgs.append({"role": "user", "content": prompt})
-            r = client.chat.completions.create(model=model, messages=msgs, max_tokens=2000)
-            return r.choices[0].message.content
-        return call
-    except Exception:
-        return None
-
-def _load_groq():
-    try:
-        from groq import Groq
-        key = os.environ.get("GROQ_API_KEY") or _cfg("groq.api_key")
-        if not key:
-            return None
-        client = Groq(api_key=key)
-        model = os.environ.get("GROQ_MODEL") or _cfg("groq.model") or "llama-3.3-70b-versatile"
-
-        def call(prompt, system=""):
-            msgs = []
-            if system:
-                msgs.append({"role": "system", "content": system})
-            msgs.append({"role": "user", "content": prompt})
-            r = client.chat.completions.create(model=model, messages=msgs, max_tokens=2000)
-            return r.choices[0].message.content
-        return call
-    except Exception:
-        return None
-
-def _load_sambanova():
-    try:
-        import openai
-        key = os.environ.get("SAMBANOVA_API_KEY") or _cfg("sambanova.api_key")
-        if not key:
-            return None
-        client = openai.OpenAI(
-            api_key=key,
-            base_url="https://api.sambanova.ai/v1"
-        )
-        model = os.environ.get("SAMBANOVA_MODEL") or _cfg("sambanova.model") or "Meta-Llama-3.1-70B-Instruct"
-
-        def call(prompt, system=""):
-            msgs = []
-            if system:
-                msgs.append({"role": "system", "content": system})
-            msgs.append({"role": "user", "content": prompt})
-            r = client.chat.completions.create(model=model, messages=msgs, max_tokens=2000)
-            return r.choices[0].message.content
-        return call
-    except Exception:
-        return None
-
-def _load_openai():
-    try:
-        import openai
-        key = os.environ.get("OPENAI_API_KEY") or _cfg("openai.api_key")
-        if not key:
-            return None
-        client = openai.OpenAI(api_key=key)
-        model = os.environ.get("OPENAI_MODEL") or _cfg("openai.model") or "gpt-4o-mini"
-
-        def call(prompt, system=""):
-            msgs = []
-            if system:
-                msgs.append({"role": "system", "content": system})
-            msgs.append({"role": "user", "content": prompt})
-            r = client.chat.completions.create(model=model, messages=msgs, max_tokens=2000)
-            return r.choices[0].message.content
-        return call
-    except Exception:
-        return None
 
 def _load_anthropic():
+    """Anthropic — separate SDK, no /v1/models auto-detect."""
     try:
         import anthropic
-        key = os.environ.get("ANTHROPIC_API_KEY") or _cfg("anthropic.api_key")
-        if not key:
-            return None
+    except ImportError:
+        return None
+
+    key = os.environ.get("ANTHROPIC_API_KEY") or _cfg("anthropic.api_key")
+    if not key:
+        return None
+
+    model = os.environ.get("ANTHROPIC_MODEL") or _cfg("anthropic.model") or "claude-haiku-4-5-20251001"
+
+    try:
         client = anthropic.Anthropic(api_key=key)
-        model = os.environ.get("ANTHROPIC_MODEL") or _cfg("anthropic.model") or "claude-haiku-4-5-20251001"
+        print(f"[compile] provider: anthropic  model: {model}")
 
         def call(prompt, system=""):
             kwargs = {"model": model, "max_tokens": 2000,
@@ -176,15 +241,6 @@ def _load_anthropic():
         return call
     except Exception:
         return None
-
-PROVIDER_ORDER = [
-    ("universal", _load_universal),   # LLM_API_KEY + any OpenAI-compatible URL
-    ("cerebras",  _load_cerebras),
-    ("groq",      _load_groq),
-    ("sambanova", _load_sambanova),
-    ("openai",    _load_openai),
-    ("anthropic", _load_anthropic),
-]
 
 # ---------------------------------------------------------------------------
 # Config helpers
@@ -220,20 +276,30 @@ def _cfg(dotpath: str):
 # ---------------------------------------------------------------------------
 
 def get_llm(preferred: str = None):
-    order = PROVIDER_ORDER[:]
     pref = preferred or os.environ.get("COMPILE_PROVIDER") or _cfg("provider")
-    if pref:
-        order.sort(key=lambda x: 0 if x[0] == pref else 1)
 
-    for name, loader in order:
+    # Build ordered list: universal first, then named providers, then anthropic
+    named = list(KNOWN_PROVIDERS)
+    if pref:
+        named.sort(key=lambda s: 0 if s["name"] == pref else 1)
+
+    loaders = [("universal", _load_universal)]
+    loaders += [(s["name"], lambda s=s: _load_provider(s)) for s in named]
+    loaders += [("anthropic", _load_anthropic)]
+
+    for name, loader in loaders:
         fn = loader()
         if fn:
-            print(f"[compile] provider: {name}")
             return fn
 
     print("[compile] ERROR: no LLM provider available.")
-    print("  Set one of: CEREBRAS_API_KEY, GROQ_API_KEY, SAMBANOVA_API_KEY,")
-    print("              OPENAI_API_KEY, ANTHROPIC_API_KEY")
+    print("  Set any one of these env vars:")
+    print("    LLM_API_KEY=<key> LLM_BASE_URL=https://api.groq.com/openai/v1")
+    print("    CEREBRAS_API_KEY=<key>")
+    print("    GROQ_API_KEY=<key>")
+    print("    SAMBANOVA_API_KEY=<key>")
+    print("    OPENAI_API_KEY=<key>")
+    print("    ANTHROPIC_API_KEY=<key>")
     print("  Or fill scripts/config.yaml")
     sys.exit(1)
 
