@@ -1,0 +1,5 @@
+scripts/config.yaml
+__pycache__/
+*.pyc
+.env
+*.env
