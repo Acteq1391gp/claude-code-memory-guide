@@ -6,13 +6,26 @@ Reads Claude Code JSONL transcripts, extracts conversation turns,
 and uses an LLM to synthesize memory entries (user facts, feedback,
 project state) in the format expected by the memory/ vault.
 
-Multi-provider: Cerebras → Groq → SambaNova → OpenAI → Anthropic
-Priority order determined by COMPILE_PROVIDER env var or config.yaml.
+Quickstart — set ANY one of these and it works:
+
+    export LLM_API_KEY="your-key"          # universal: works with any OpenAI-compatible API
+    export LLM_BASE_URL="https://..."      # optional: defaults to OpenAI
+    export LLM_MODEL="llama-3.3-70b"       # optional: defaults to gpt-4o-mini
+
+Named providers (auto-detected from their env vars):
+
+    CEREBRAS_API_KEY   → api.cerebras.ai   (free tier)
+    GROQ_API_KEY       → api.groq.com      (free tier)
+    SAMBANOVA_API_KEY  → api.sambanova.ai
+    OPENAI_API_KEY     → api.openai.com
+    ANTHROPIC_API_KEY  → api.anthropic.com
+
+Priority: LLM_API_KEY → Cerebras → Groq → SambaNova → OpenAI → Anthropic
 
 Usage:
     python compile.py                        # auto-detect latest session
     python compile.py --session <path.jsonl> # specific session file
-    python compile.py --provider cerebras    # override provider
+    python compile.py --provider cerebras    # override named provider
     python compile.py --dry-run              # print without saving
 
 Output:
@@ -38,6 +51,28 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 PROVIDERS = {}
+
+def _load_universal():
+    """Universal OpenAI-compatible provider via LLM_API_KEY + LLM_BASE_URL."""
+    try:
+        import openai
+        key = os.environ.get("LLM_API_KEY") or _cfg("llm.api_key")
+        if not key:
+            return None
+        base_url = os.environ.get("LLM_BASE_URL") or _cfg("llm.base_url") or "https://api.openai.com/v1"
+        model = os.environ.get("LLM_MODEL") or _cfg("llm.model") or "gpt-4o-mini"
+        client = openai.OpenAI(api_key=key, base_url=base_url)
+
+        def call(prompt, system=""):
+            msgs = []
+            if system:
+                msgs.append({"role": "system", "content": system})
+            msgs.append({"role": "user", "content": prompt})
+            r = client.chat.completions.create(model=model, messages=msgs, max_tokens=2000)
+            return r.choices[0].message.content
+        return call
+    except Exception:
+        return None
 
 def _load_cerebras():
     try:
@@ -143,6 +178,7 @@ def _load_anthropic():
         return None
 
 PROVIDER_ORDER = [
+    ("universal", _load_universal),   # LLM_API_KEY + any OpenAI-compatible URL
     ("cerebras",  _load_cerebras),
     ("groq",      _load_groq),
     ("sambanova", _load_sambanova),

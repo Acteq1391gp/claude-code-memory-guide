@@ -31,38 +31,41 @@ Next Claude session reads MEMORY.md → loads relevant files → full context
 
 ```bash
 # 1. Install deps
-pip install anthropic openai groq cerebras-cloud-sdk pyyaml
+pip install openai pyyaml   # minimum — openai package works for all providers below
 
-# 2. Set your key (cheapest option first)
-export CEREBRAS_API_KEY="your-key"   # free tier available
-# or
-export GROQ_API_KEY="your-key"       # free tier available
-# or any other supported provider
+# 2. Set ANY key you have — one is enough
+export LLM_API_KEY="your-key"
+export LLM_BASE_URL="https://api.groq.com/openai/v1"   # Groq example
+export LLM_MODEL="llama-3.3-70b-versatile"
 
-# 3. Run after a session
+# 3. Run
 python scripts/compile.py
 ```
+
+Works with **any OpenAI-compatible API**: Groq, Cerebras, SambaNova, OpenRouter,
+Together AI, Mistral, local Ollama — anything that speaks `/v1/chat/completions`.
+
+**Free options:**
+- Groq: [console.groq.com](https://console.groq.com) → free tier → `base_url: https://api.groq.com/openai/v1`
+- Cerebras: [cloud.cerebras.ai](https://cloud.cerebras.ai) → free tier → `base_url: https://api.cerebras.ai/v1`
 
 ## Provider Priority
 
-compile.py tries providers in this order (first available wins):
-
 ```
-Cerebras → Groq → SambaNova → OpenAI → Anthropic
-```
-
-Override with env var or config.yaml:
-```bash
-export COMPILE_PROVIDER=groq
-python scripts/compile.py
+LLM_API_KEY (universal)
+    → CEREBRAS_API_KEY
+    → GROQ_API_KEY
+    → SAMBANOVA_API_KEY
+    → OPENAI_API_KEY
+    → ANTHROPIC_API_KEY
 ```
 
-Or put in `scripts/config.yaml`:
+Or use `scripts/config.yaml` (gitignored — safe for keys):
 ```yaml
-provider: cerebras
-cerebras:
+llm:
   api_key: "your-key"
-  model: "llama-3.3-70b"
+  base_url: "https://api.groq.com/openai/v1"
+  model: "llama-3.3-70b-versatile"
 ```
 
 ## Auto-run via Claude Code Hooks
